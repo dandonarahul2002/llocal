@@ -90,24 +90,101 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // Autoupdater
-  autoUpdater.checkForUpdatesAndNotify()
-  autoUpdater.on('update-downloaded', () => {
+  // Autoupdater setup for macOS
+  autoUpdater.logger = console
+  autoUpdater.autoDownload = false // Don't auto-download, ask user first
+  autoUpdater.autoInstallOnAppQuit = true
+  
+  // Set update feed URL for macOS
+  if (process.platform === 'darwin') {
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'kartikm7',
+      repo: 'llocal',
+      private: false
+    })
+  }
+
+  // Only check for updates in production builds
+  if (!is.dev) {
+    // Check for updates when app is ready
+    autoUpdater.checkForUpdatesAndNotify()
+  }
+
+  // Handle update available
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available:', info)
     dialog
       .showMessageBox({
-        title: 'Update Downloaded!',
-        message: 'A new version has been downloaded!',
-        buttons: ['Go Ahead', 'Release Notes', 'Later'],
-        detail: 'LLocal will be closed and the update will be installed!'
+        type: 'info',
+        title: 'Update Available',
+        message: `A new version (${info.version}) is available!`,
+        detail: 'Would you like to download and install it?',
+        buttons: ['Download Now', 'View Release Notes', 'Later'],
+        defaultId: 0,
+        cancelId: 2
       })
-      .then((click) => {
-        if (click.response === 0) {
-          autoUpdater.quitAndInstall()
-        }
-        if (click.response === 1) {
+      .then((result) => {
+        if (result.response === 0) {
+          autoUpdater.downloadUpdate()
+        } else if (result.response === 1) {
           shell.openExternal('https://github.com/kartikm7/llocal/releases')
         }
       })
+      .catch((err) => {
+        console.error('Error showing update dialog:', err)
+      })
+  })
+
+  // Handle no update available
+  autoUpdater.on('update-not-available', (info) => {
+    console.log('Update not available:', info)
+  })
+
+  // Handle download progress
+  autoUpdater.on('download-progress', (progressObj) => {
+    let log_message = `Download speed: ${progressObj.bytesPerSecond}`
+    log_message = log_message + ` - Downloaded ${progressObj.percent}%`
+    log_message = log_message + ` (${progressObj.transferred}/${progressObj.total})`
+    console.log(log_message)
+  })
+
+  // Handle update downloaded
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('Update downloaded:', info)
+    dialog
+      .showMessageBox({
+        type: 'info',
+        title: 'Update Downloaded!',
+        message: 'A new version has been downloaded and is ready to install!',
+        detail: 'LLocal will be closed and the update will be installed. Click "Install Now" to proceed or "Later" to install on next restart.',
+        buttons: ['Install Now', 'View Release Notes', 'Later'],
+        defaultId: 0,
+        cancelId: 2
+      })
+      .then((result) => {
+        if (result.response === 0) {
+          // Quit and install immediately
+          autoUpdater.quitAndInstall(false, true)
+        } else if (result.response === 1) {
+          shell.openExternal('https://github.com/kartikm7/llocal/releases')
+        }
+        // If "Later" is selected, update will be installed on next app restart
+      })
+      .catch((err) => {
+        console.error('Error showing download complete dialog:', err)
+      })
+  })
+
+  // Handle errors
+  autoUpdater.on('error', (error) => {
+    console.error('AutoUpdater error:', error)
+    if (error.message.includes('ERR_UPDATER_INVALID_RELEASE_FEED')) {
+      console.log('Invalid release feed - this is normal in development')
+    } else if (!is.dev) {
+      // Only show error dialog in production
+      dialog.showErrorBox('Update Error', `Error in auto-updater: ${error.message}`)
+    }
   })
 
   // Serving ollama, if not present then performing the download function
@@ -264,6 +341,22 @@ app.whenReady().then(() => {
     return new Promise((resolve) => {
       resolve(deleteVectorDb(indexPath))
     })
+  })
+
+  // Manual check for updates handler
+  ipcMain.handle('checkForUpdates', async (): Promise<boolean> => {
+    if (is.dev) {
+      console.log('Update check skipped in development mode')
+      return false
+    }
+    
+    try {
+      const result = await autoUpdater.checkForUpdates()
+      return result !== null
+    } catch (error) {
+      console.error('Manual update check failed:', error)
+      return false
+    }
   })
 
   createWindow()
